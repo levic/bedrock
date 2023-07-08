@@ -102,13 +102,15 @@ class Chunk:
     else:
       self.hMap, self.biomes = None, None
 
-    self.subchunks = []
-    for i in range(24 if self.cavesAndCliffs else 16):
+    self.subchunks = {}
+    y_min = -4 if self.cavesAndCliffs else 0
+    y_max = 20 if self.cavesAndCliffs else 16
+    for i in range(y_min, y_max + 1):
       try:
-        self.subchunks.append(SubChunk(db, self.x, self.z, i, self.dimension)) #Pass off processing to the subchunk class
+        self.subchunks[i] = SubChunk(db, self.x, self.z, i, self.dimension) #Pass off processing to the subchunk class
       #Supposedly if a subchunk exists then all the subchunks below it exist. This is not the case.
       except NotFoundError:
-        self.subchunks.append(None)
+        self.subchunks[i] = None
 
     self._loadTileEntities(db)
     self.entities = self._loadEntities(db)
@@ -121,7 +123,7 @@ class Chunk:
       except KeyError:
         version = ldb.get(db, self.keyBase + b"v")
       version = struct.unpack("<B", version)[0]
-      if version not in [10, 13, 14, 15, 18, 19, 21, 22, 25]:
+      if version not in [10, 13, 14, 15, 18, 19, 21, 22, 25, 40]:
         raise NotImplementedError("Unexpected chunk version {} at chunk {} {} (Dim {}).".format(version, self.x, self.z, self.dimension))
     except KeyError:
       raise KeyError("Chunk at {}, {} (Dim {}) does not exist.".format(self.x, self.z, self.dimension))
@@ -164,15 +166,11 @@ class Chunk:
     return entities
 
   def getBlock(self, x, y, z, layer=0):
-    if self.cavesAndCliffs:
-      y += 64
-    if y // 16 + 1 > len(self.subchunks) or self.subchunks[y // 16] is None:
+    if self.subchunks.get(y // 16, None) is None:
       return None
     return self.subchunks[y // 16].getBlock(x, y % 16, z, layer)
 
   def setBlock(self, x, y, z, block, layer=0):
-    if self.cavesAndCliffs:
-      y += 64
     while y // 16 + 1 > len(self.subchunks):
       self.subchunks.append(SubChunk.empty(self.x, self.z, len(self.subchunks), self.dimension))
     if self.subchunks[y // 16] is None:
@@ -184,7 +182,7 @@ class Chunk:
     ldb.put(db, self.keyBase + b",", version)
     if not self.cavesAndCliffs:
       self._save2D(db)
-    for subchunk in self.subchunks:
+    for subchunk in self.subchunks.values():
       if subchunk is None:
         continue
       subchunk.save(db)
@@ -198,7 +196,7 @@ class Chunk:
 
   def _saveTileEntities(self, db):
     data = nbt.DataWriter()
-    for subchunk in self.subchunks:
+    for subchunk in self.subchunks.values():
       if subchunk is None:
         continue
       for x in range(16):
@@ -232,9 +230,9 @@ class SubChunk:
     if db is not None: # For creating subchunks, there will be no DB.
       # Subchunks are stored as base key + subchunk key `/` + subchunk id (y level // 16)
       if self.dimension == 0:
-        self.key = struct.pack("<iicB", x, z, b'/', y)
+        self.key = struct.pack("<iicb", x, z, b'/', y)
       else:
-        self.key = struct.pack("<iiicB", x, z, dimension, b'/', y)
+        self.key = struct.pack("<iiicb", x, z, dimension, b'/', y)
       try:
         data = ldb.get(db, self.key)
       except KeyError:
